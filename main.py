@@ -127,7 +127,7 @@ class RealtimeApp(App[None]):
         self.should_send_audio = asyncio.Event()
         self.connected = asyncio.Event()
         self.pipeline = VoicePipeline(
-            workflow=MyWorkflow(secret_word="dog", on_start=self._on_transcription)
+            workflow=MyWorkflow(on_start=self._on_transcription)
         )
         self._audio_input = StreamedAudioInput()
         self.audio_player = sd.OutputStream(

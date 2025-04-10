@@ -1,4 +1,5 @@
 import random
+import re
 from collections.abc import AsyncIterator
 from typing import Callable, Dict, Optional, List
 from agents import Agent, Runner, TResponseInputItem, function_tool
@@ -49,31 +50,6 @@ def get_all_prompts() -> Dict[str, str]:
 # Load all prompts from Firebase
 all_prompts = get_all_prompts()
 
-# Access prompts by their document IDs
-CHOICE_LAYER_PROMPT = all_prompts.get("CHOICE_LAYER_PROMPT", "")
-CAR_GAME_PROMPT = all_prompts.get("CAR_GAME_PROMPT", "")
-ISLAND_GAME_PROMPT = all_prompts.get("ISLAND_GAME_PROMPT", "")
-
-# Function to retrieve a specific prompt
-def get_prompt(prompt_name: str) -> str:
-    """
-    Retrieve a specific prompt from Firebase.
-    
-    Args:
-        prompt_name: The document ID of the prompt to retrieve.
-        
-    Returns:
-        The prompt content or empty string if not found.
-    """
-    doc_ref = db.collection("Prompts").document(prompt_name)
-    doc = doc_ref.get()
-    
-    if doc.exists:
-        return doc.to_dict().get("content", "")
-    else:
-        log_debug(f"Warning: Prompt '{prompt_name}' not found!")
-        return ""
-
 # Define a vocabulary tracking tool
 @function_tool
 def track_vocabulary(word: str, translation: str, context: str) -> str:
@@ -94,54 +70,123 @@ def get_child_age() -> int:
     # For demo purposes, we return a fixed age
     return 5
 
-# Function to create game agents from available prompts
-def create_game_agents() -> Dict[str, Dict]:
+# Function to detect game prompts and extract metadata
+def detect_game_prompts(prompts: Dict[str, str]) -> Dict[str, Dict]:
     """
-    Create game agents dynamically based on available prompts in Firebase.
+    Detect game prompts from the full set of prompts and extract metadata.
     
+    Args:
+        prompts: Dictionary of all prompts
+        
+    Returns:
+        Dictionary mapping prompt_id to metadata about that game
+    """
+    game_prompts = {}
+    
+    # Pattern for detecting game prompt IDs (looking for *_GAME_PROMPT pattern)
+    game_pattern = re.compile(r'(.+)_GAME_PROMPT$')
+    
+    # Look for standard game prompts
+    for prompt_id, content in prompts.items():
+        match = game_pattern.match(prompt_id)
+        
+        if match:
+            game_id = match.group(1)  # Extract the game name part
+            
+            # Extract game name from prompt content (first line often has it)
+            name = game_id.replace("_", " ")  # Default name
+            description = f"Learn Spanish through a fun {game_id.lower()} adventure!"  # Default description
+            
+            # Try to extract better name/description from the prompt content
+            if "game is called" in content.lower():
+                # Look for a line like "This game is called 'Spanish Road Trip.'"
+                for line in content.split('\n'):
+                    if "game is called" in line.lower():
+                        # Extract the name within quotes if present
+                        name_match = re.search(r'"([^"]+)"', line)
+                        if name_match:
+                            name = name_match.group(1)
+                        else:
+                            # Try extracting text after "called" without quotes
+                            name_match = re.search(r'called\s+(.+?)[\.\s]', line)
+                            if name_match:
+                                name = name_match.group(1).strip('" ')
+            
+            # Store the metadata
+            game_prompts[prompt_id] = {
+                "game_id": game_id,
+                "name": name,
+                "description": description,
+                "content": content
+            }
+    
+    # Manually handle special cases for backward compatibility
+    if "CAR_GAME_PROMPT" in prompts and "CAR_GAME_PROMPT" not in game_prompts:
+        game_prompts["CAR_GAME_PROMPT"] = {
+            "game_id": "CarGame",
+            "name": "Spanish Road Trip",
+            "description": "Take a magical car journey and learn Spanish words for colors, animals, and objects!",
+            "content": prompts["CAR_GAME_PROMPT"]
+        }
+    
+    if "ISLAND_GAME_PROMPT" in prompts and "ISLAND_GAME_PROMPT" not in game_prompts:
+        game_prompts["ISLAND_GAME_PROMPT"] = {
+            "game_id": "IslandGame",
+            "name": "Pirate Island Adventure",
+            "description": "Sail between islands as a pirate and discover Spanish treasure words!",
+            "content": prompts["ISLAND_GAME_PROMPT"]
+        }
+    
+    return game_prompts
+
+# Function to create game agents from detected game prompts
+def create_game_agents(game_prompts: Dict[str, Dict]) -> Dict[str, Dict]:
+    """
+    Create game agents dynamically based on detected game prompts.
+    
+    Args:
+        game_prompts: Dictionary of game prompts with metadata
+        
     Returns:
         Dictionary of available agents with their info.
     """
     available_agents = {}
     
-    # Define fixed agents (could be made dynamic too if needed)
-    if "CAR_GAME_PROMPT" in all_prompts:
-        car_game_agent = Agent(
-            name="CarGame",
-            handoff_description="A car-themed Spanish learning adventure for children.",
-            instructions=prompt_with_handoff_instructions(CAR_GAME_PROMPT),
+    for prompt_id, game_info in game_prompts.items():
+        game_id = game_info["game_id"]
+        name = game_info["name"]
+        description = game_info["description"]
+        content = game_info["content"]
+        
+        # Create the agent
+        game_agent = Agent(
+            name=game_id,
+            handoff_description=f"A {name} Spanish learning adventure for children.",
+            instructions=prompt_with_handoff_instructions(content),
             model="gpt-4o",
             tools=[track_vocabulary]
         )
         
-        available_agents["CarGame"] = {
-            "name": "Spanish Road Trip",
-            "description": "Take a magical car journey and learn Spanish words for colors, animals, and objects!",
-            "agent": car_game_agent
+        # Add to available agents
+        available_agents[game_id] = {
+            "name": name,
+            "description": description,
+            "agent": game_agent,
+            "prompt_id": prompt_id
         }
-    
-    if "ISLAND_GAME_PROMPT" in all_prompts:
-        island_game_agent = Agent(
-            name="IslandGame",
-            handoff_description="A pirate-themed island adventure for learning Spanish.",
-            instructions=prompt_with_handoff_instructions(ISLAND_GAME_PROMPT),
-            model="gpt-4o",
-            tools=[track_vocabulary]
-        )
         
-        available_agents["IslandGame"] = {
-            "name": "Pirate Island Adventure",
-            "description": "Sail between islands as a pirate and discover Spanish treasure words!",
-            "agent": island_game_agent
-        }
-    
-    # You could scan for other game prompts here and create agents for them
-    # For example, looking for prompts with a specific naming pattern like "GAME_*_PROMPT"
+        log_debug(f"Created agent for game: {game_id} ({name})")
     
     return available_agents
 
-# Create our available agents
-AVAILABLE_AGENTS = create_game_agents()
+# Detect game prompts and extract metadata
+game_prompts = detect_game_prompts(all_prompts)
+
+# Create agents for each detected game
+AVAILABLE_AGENTS = create_game_agents(game_prompts)
+
+# Access the choice layer prompt
+CHOICE_LAYER_PROMPT = all_prompts.get("CHOICE_LAYER_PROMPT", "")
 
 # Create the choice layer agent with info about available agents
 choice_layer_agent = Agent(
@@ -159,6 +204,60 @@ choice_layer_agent = Agent(
 # Add handoff back to the choice layer for all game agents
 for agent_info in AVAILABLE_AGENTS.values():
     agent_info["agent"].handoffs.append(choice_layer_agent)
+
+# Set up Firebase listener to detect new prompts
+def setup_prompt_listener():
+    """
+    Set up a listener for changes to the Prompts collection.
+    When a new prompt is added, update the available agents.
+    """
+    def on_snapshot(doc_snapshots, changes, read_time):
+        for change in changes:
+            if change.type.name == 'ADDED':
+                prompt_id = change.document.id
+                prompt_content = change.document.to_dict().get("content", "")
+                
+                log_debug(f"New prompt detected: {prompt_id}")
+                
+                # Check if it's a game prompt
+                if "_GAME_PROMPT" in prompt_id:
+                    # Update all_prompts
+                    all_prompts[prompt_id] = prompt_content
+                    
+                    # Re-detect game prompts
+                    new_game_prompts = detect_game_prompts({prompt_id: prompt_content})
+                    
+                    if new_game_prompts:
+                        # Create new agent(s)
+                        new_agents = create_game_agents(new_game_prompts)
+                        
+                        # Add to available agents
+                        for game_id, agent_info in new_agents.items():
+                            AVAILABLE_AGENTS[game_id] = agent_info
+                            
+                            # Add handoff to choice layer
+                            agent_info["agent"].handoffs.append(choice_layer_agent)
+                            
+                            # Add handoff from choice layer to new agent
+                            choice_layer_agent.handoffs.append(agent_info["agent"])
+                        
+                        # Update choice layer instructions with new available agents
+                        choice_layer_agent.instructions = prompt_with_handoff_instructions(
+                            CHOICE_LAYER_PROMPT + "\n\nAVAILABLE_AGENTS: " + 
+                            ", ".join([f"{key}: {value['name']} - {value['description']}" 
+                                      for key, value in AVAILABLE_AGENTS.items()])
+                        )
+                        
+                        log_debug(f"Updated choice layer with new game: {game_id}")
+    
+    # Set up the listener
+    prompts_ref = db.collection("Prompts")
+    prompts_watch = prompts_ref.on_snapshot(on_snapshot)
+    
+    return prompts_watch  # Return the watch so it can be stopped if needed
+
+# Start the prompt listener
+prompt_watch = setup_prompt_listener()
 
 class LanguageTutorContext:
     """Context for tracking state in the language tutor workflow."""
@@ -213,52 +312,60 @@ class MyWorkflow(VoiceWorkflowBase):
         lowercase_input = transcription.lower()
         
         # Check for direct game selection commands (for testing/debugging)
-        if "play car game" in lowercase_input or "car ride" in lowercase_input:
-            log_debug("Detected direct request for Car Game")
-            self._current_agent = AVAILABLE_AGENTS["CarGame"]["agent"]
-            self._context.current_game = "CarGame"
-            yield "Switching to Spanish Road Trip! Get ready for a fun car adventure!"
-            self._input_history.append({
-                "role": "assistant", 
-                "content": "Switching to Spanish Road Trip! Get ready for a fun car adventure!"
-            })
-            
-        elif "play island game" in lowercase_input or "pirate adventure" in lowercase_input:
-            log_debug("Detected direct request for Island Game")
-            self._current_agent = AVAILABLE_AGENTS["IslandGame"]["agent"]
-            self._context.current_game = "IslandGame"
-            yield "Switching to Pirate Island Adventure! Get ready to sail the seas!"
-            self._input_history.append({
-                "role": "assistant",
-                "content": "Switching to Pirate Island Adventure! Get ready to sail the seas!"
-            })
-            
-        # Run the current agent with the input history
-        log_debug(f"Running agent: {self._current_agent.name}")
-        result = Runner.run_streamed(self._current_agent, self._input_history)
+        # Dynamically check all available games
+        game_switch_detected = False
         
-        # Stream the response chunks back
-        async for chunk in VoiceWorkflowHelper.stream_text_from(result):
-            yield chunk
+        for game_id, game_info in AVAILABLE_AGENTS.items():
+            game_name = game_info["name"].lower()
             
-        # Update the conversation history with the result
-        self._input_history = result.to_input_list()
+            # Check for common patterns to switch to this game
+            if (f"play {game_id.lower()}" in lowercase_input or 
+                f"play {game_name}" in lowercase_input or
+                game_name in lowercase_input):
+                
+                log_debug(f"Detected direct request for {game_id}")
+                self._current_agent = game_info["agent"]
+                self._context.current_game = game_id
+                
+                switch_message = f"Switching to {game_info['name']}! Get ready for a fun adventure!"
+                yield switch_message
+                
+                self._input_history.append({
+                    "role": "assistant", 
+                    "content": switch_message
+                })
+                
+                game_switch_detected = True
+                break
         
-        # Check if there was a handoff to a different agent
-        if result.last_agent != self._current_agent:
-            log_debug(f"Agent handoff: {self._current_agent.name} -> {result.last_agent.name}")
+        # Only proceed with normal processing if no game switch was detected
+        if not game_switch_detected:
+            # Run the current agent with the input history
+            log_debug(f"Running agent: {self._current_agent.name}")
+            result = Runner.run_streamed(self._current_agent, self._input_history)
             
-            # Update the current agent and game context
-            self._current_agent = result.last_agent
+            # Stream the response chunks back
+            async for chunk in VoiceWorkflowHelper.stream_text_from(result):
+                yield chunk
+                
+            # Update the conversation history with the result
+            self._input_history = result.to_input_list()
             
-            # Update the current game in the context
-            for game_id, game_info in AVAILABLE_AGENTS.items():
-                if game_info["agent"] == self._current_agent:
-                    self._context.current_game = game_id
-                    log_debug(f"Updated current game to {game_id}")
-                    break
-                    
-            # If we've returned to the choice layer
-            if self._current_agent == choice_layer_agent:
-                self._context.current_game = None
-                log_debug("Returned to choice layer")
+            # Check if there was a handoff to a different agent
+            if result.last_agent != self._current_agent:
+                log_debug(f"Agent handoff: {self._current_agent.name} -> {result.last_agent.name}")
+                
+                # Update the current agent and game context
+                self._current_agent = result.last_agent
+                
+                # Update the current game in the context
+                for game_id, game_info in AVAILABLE_AGENTS.items():
+                    if game_info["agent"] == self._current_agent:
+                        self._context.current_game = game_id
+                        log_debug(f"Updated current game to {game_id}")
+                        break
+                        
+                # If we've returned to the choice layer
+                if self._current_agent == choice_layer_agent:
+                    self._context.current_game = None
+                    log_debug("Returned to choice layer")

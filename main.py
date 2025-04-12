@@ -121,13 +121,13 @@ class RealtimeApp(App[None]):
     last_audio_item_id: str | None
     connected: asyncio.Event
 
-    def __init__(self) -> None:
+    def __init__(self, user_id: str = 'ID1') -> None:
         super().__init__()
         self.last_audio_item_id = None
         self.should_send_audio = asyncio.Event()
         self.connected = asyncio.Event()
         self.pipeline = VoicePipeline(
-            workflow=MyWorkflow(on_start=self._on_transcription)
+            workflow=MyWorkflow(on_start=self._on_transcription, user_id=user_id)
         )
         self._audio_input = StreamedAudioInput()
         self.audio_player = sd.OutputStream(

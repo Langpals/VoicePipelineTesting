@@ -121,7 +121,7 @@ class RealtimeApp(App[None]):
     last_audio_item_id: str | None
     connected: asyncio.Event
 
-    def __init__(self, user_id: str = 'ID1') -> None:
+    def __init__(self, user_id: str = 'ID2') -> None:
         super().__init__()
         self.last_audio_item_id = None
         self.should_send_audio = asyncio.Event()

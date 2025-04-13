@@ -482,6 +482,9 @@ class MyWorkflow(VoiceWorkflowBase):
         # Trim history if it's getting too long
         self._trim_conversation_history()
         
+        # Initialize game_switch_detected to False by default
+        game_switch_detected = False
+        
         # First check if we need to enforce user info collection
         if self.current_user['name'] is None or self.current_user['age'] is None:
             log_debug("Missing user info detected. Ensuring UserInfoCollector is active.")
@@ -514,7 +517,6 @@ class MyWorkflow(VoiceWorkflowBase):
             
             # Check for direct game selection commands (for testing/debugging)
             # Dynamically check all available games
-            game_switch_detected = False
             
             for game_id, game_info in self._available_agents.items():
                 game_name = game_info["name"].lower()
